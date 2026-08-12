@@ -1,12 +1,27 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'medusa-admin-key-change-me';
+const KEYS_FILE = path.join(__dirname, 'keys.json');
 
-let keysDb = {};
+function loadKeys() {
+  try {
+    const data = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
+    return data.keys || {};
+  } catch { return {}; }
+}
+
+function saveKeys() {
+  try { fs.writeFileSync(KEYS_FILE, JSON.stringify({ keys: keysDb }, null, 2)); } catch {}
+}
+
+let keysDb = loadKeys();
+
 const openLogs = [];
 const flaggedUsers = [];
 
@@ -18,9 +33,7 @@ function generateKey() {
   const parts = [];
   for (let g = 0; g < 4; g++) {
     let seg = '';
-    for (let i = 0; i < 4; i++) {
-      seg += chars[crypto.randomInt(chars.length)];
-    }
+    for (let i = 0; i < 4; i++) seg += chars[crypto.randomInt(chars.length)];
     parts.push(seg);
   }
   return 'MEDUSA-' + parts.join('-');
@@ -51,6 +64,7 @@ app.post('/api/activate', (req, res) => {
   }
   if (keysDb[normalizedKey] === null) {
     keysDb[normalizedKey] = hwid;
+    saveKeys();
     return res.json({ ok: true, message: 'Key activated and locked to this PC.' });
   }
   if (keysDb[normalizedKey] === hwid) return res.json({ ok: true, message: 'Already activated on this PC.' });
@@ -84,6 +98,7 @@ app.post('/api/signup', (req, res) => {
     return res.json({ ok: false, message: 'Key already activated.' });
   }
   keysDb[normalizedKey] = username;
+  saveKeys();
   return res.json({ ok: true, message: 'Account created.' });
 });
 
@@ -107,6 +122,7 @@ app.post('/api/admin/generate', (req, res) => {
     keysDb[key] = null;
     generated.push(key);
   }
+  saveKeys();
   return res.json({ ok: true, keys: generated });
 });
 
@@ -123,6 +139,7 @@ app.delete('/api/admin/remove', (req, res) => {
   const normalizedKey = key.toUpperCase().trim();
   if (keysDb[normalizedKey] !== undefined) {
     delete keysDb[normalizedKey];
+    saveKeys();
     return res.json({ ok: true, message: `Removed ${normalizedKey}` });
   }
   return res.json({ ok: false, error: 'Key not found.' });
@@ -164,17 +181,19 @@ app.get('/admin', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head><title>Medusa Admin</title>
 <style>
-  body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:40px;max-width:800px;margin:0 auto}
-  h1{color:#8b5cf6}input,button{background:#1a1a1a;color:#e0e0e0;border:1px solid #333;padding:10px;font-family:monospace;font-size:14px;border-radius:6px;margin:4px}
-  input:focus{border-color:#8b5cf6;outline:none}button{background:#8b5cf6;color:#fff;cursor:pointer;border:none;font-weight:bold}
+  body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:40px;max-width:900px;margin:0 auto}
+  h1{color:#8b5cf6}
+  input,button{background:#1a1a1a;color:#e0e0e0;border:1px solid #333;padding:10px;font-family:monospace;font-size:14px;border-radius:6px;margin:4px}
+  input:focus{border-color:#8b5cf6;outline:none}
+  button{background:#8b5cf6;color:#fff;cursor:pointer;border:none;font-weight:bold}
   button:hover{background:#7c3aed}
-  #result{margin-top:20px;padding:15px;background:#1a1a1a;border-radius:6px;display:none;border:1px solid #333;white-space:pre-wrap}
+  #result{margin-top:20px;padding:15px;background:#1a1a1a;border-radius:6px;display:none;border:1px solid #333;white-space:pre-wrap;max-height:500px;overflow-y:auto}
   label{display:block;margin-top:16px;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px}
 </style></head><body>
 <h1>Medusa License Server</h1>
 <label>Admin Secret</label>
 <input type="password" id="secret" placeholder="Enter admin secret" style="width:300px">
-<label>Generate Keys</label>
+<label>Actions</label>
 <div>
   <input type="number" id="count" value="5" min="1" max="50" style="width:80px">
   <button onclick="generate()">Generate</button>
