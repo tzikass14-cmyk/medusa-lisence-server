@@ -8,6 +8,7 @@ const ADMIN_SECRET = process.env.ADMIN_SECRET || 'medusa-admin-key-change-me';
 
 let keysDb = {};
 const openLogs = [];
+const flaggedUsers = [];
 
 app.use(cors());
 app.use(express.json());
@@ -25,16 +26,35 @@ function generateKey() {
   return 'MEDUSA-' + parts.join('-');
 }
 
+function addFlag(reason, hwid, ip, detail) {
+  const entry = {
+    time: new Date().toISOString(),
+    reason,
+    hwid: hwid || 'unknown',
+    ip: ip || 'unknown',
+    detail: detail || ''
+  };
+  flaggedUsers.unshift(entry);
+  if (flaggedUsers.length > 500) flaggedUsers.pop();
+  openLogs.unshift({ ...entry, event: '🚨 FLAGGED', username: 'SUSPICIOUS' });
+  if (openLogs.length > 1000) openLogs.pop();
+}
+
 app.post('/api/activate', (req, res) => {
   const { key, hwid } = req.body;
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   if (!key || !hwid) return res.json({ ok: false, error: 'Missing key or hwid.' });
   const normalizedKey = key.toUpperCase().trim();
-  if (!(normalizedKey in keysDb)) return res.json({ ok: false, error: 'Invalid license key.' });
+  if (!(normalizedKey in keysDb)) {
+    addFlag('invalid_key', hwid, ip, `Tried invalid key: ${normalizedKey}`);
+    return res.json({ ok: false, error: 'Invalid license key.' });
+  }
   if (keysDb[normalizedKey] === null) {
     keysDb[normalizedKey] = hwid;
     return res.json({ ok: true, message: 'Key activated and locked to this PC.' });
   }
   if (keysDb[normalizedKey] === hwid) return res.json({ ok: true, message: 'Already activated on this PC.' });
+  addFlag('hwid_mismatch', hwid, ip, `Key ${normalizedKey} locked to ${keysDb[normalizedKey]}, attempted by HWID ${hwid}`);
   return res.json({ ok: false, error: 'This key is locked to another PC.' });
 });
 
@@ -43,24 +63,38 @@ app.post('/api/validate', (req, res) => {
   if (!key || !hwid) return res.json({ ok: false, error: 'Missing key or hwid.' });
   const normalizedKey = key.toUpperCase().trim();
   if (!keysDb[normalizedKey]) return res.json({ ok: false, error: 'Key not found.' });
-  if (keysDb[normalizedKey] !== hwid) return res.json({ ok: false, error: 'Key is locked to another PC.' });
+  if (keysDb[normalizedKey] !== hwid) {
+    addFlag('hwid_mismatch', hwid, req.headers['x-forwarded-for'] || req.socket.remoteAddress, `Key ${normalizedKey} used from wrong HWID`);
+    return res.json({ ok: false, error: 'Key is locked to another PC.' });
+  }
   return res.json({ ok: true });
 });
 
 app.post('/api/signup', (req, res) => {
-  const { username, password, licenseKey } = req.body;
+  const { username, licenseKey } = req.body;
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   if (!licenseKey) return res.json({ ok: false, message: 'No license key provided.' });
   const normalizedKey = licenseKey.toUpperCase().trim();
-  if (!(normalizedKey in keysDb)) return res.json({ ok: false, message: 'Invalid license key.' });
-  if (keysDb[normalizedKey] !== null) return res.json({ ok: false, message: 'Key already activated.' });
+  if (!(normalizedKey in keysDb)) {
+    addFlag('invalid_key_attempt', username, ip, `Tried key: ${normalizedKey}`);
+    return res.json({ ok: false, message: 'Invalid license key.' });
+  }
+  if (keysDb[normalizedKey] !== null && keysDb[normalizedKey] !== username) {
+    addFlag('hwid_mismatch', username, ip, `Key ${normalizedKey} locked to ${keysDb[normalizedKey]}, tried by ${username}`);
+    return res.json({ ok: false, message: 'Key already activated.' });
+  }
   keysDb[normalizedKey] = username;
   return res.json({ ok: true, message: 'Account created.' });
 });
 
 app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
+  const { username } = req.body;
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   const entry = Object.entries(keysDb).find(([k, v]) => v === username);
-  if (!entry) return res.json({ ok: false, message: 'Invalid credentials.' });
+  if (!entry) {
+    addFlag('login_failed', username, ip, `Unknown user tried to login: ${username}`);
+    return res.json({ ok: false, message: 'Invalid credentials.' });
+  }
   return res.json({ ok: true, username });
 });
 
@@ -99,16 +133,18 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/log-open', (req, res) => {
-  const { hwid, username, version } = req.body;
+  const { hwid, username, version, event, detail } = req.body;
   const entry = {
     time: new Date().toISOString(),
+    event: event || 'app_open',
     hwid: hwid || 'unknown',
     username: username || 'unknown',
     version: version || 'unknown',
+    detail: detail || '',
     ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
   };
   openLogs.unshift(entry);
-  if (openLogs.length > 500) openLogs.pop();
+  if (openLogs.length > 1000) openLogs.pop();
   return res.json({ ok: true });
 });
 
@@ -116,6 +152,12 @@ app.get('/api/admin/logs', (req, res) => {
   const secret = req.query.secret;
   if (secret !== ADMIN_SECRET) return res.json({ ok: false, error: 'Unauthorized.' });
   return res.json({ ok: true, logs: openLogs });
+});
+
+app.get('/api/admin/flags', (req, res) => {
+  const secret = req.query.secret;
+  if (secret !== ADMIN_SECRET) return res.json({ ok: false, error: 'Unauthorized.' });
+  return res.json({ ok: true, flags: flaggedUsers });
 });
 
 app.get('/admin', (req, res) => {
@@ -133,7 +175,13 @@ app.get('/admin', (req, res) => {
 <label>Admin Secret</label>
 <input type="password" id="secret" placeholder="Enter admin secret" style="width:300px">
 <label>Generate Keys</label>
-<div><input type="number" id="count" value="5" min="1" max="50" style="width:80px"> <button onclick="generate()">Generate</button> <button onclick="listKeys()" style="background:#333">List All</button> <button onclick="viewLogs()" style="background:#1a1a2e">View Logs</button></div>
+<div>
+  <input type="number" id="count" value="5" min="1" max="50" style="width:80px">
+  <button onclick="generate()">Generate</button>
+  <button onclick="listKeys()" style="background:#333">List All</button>
+  <button onclick="viewLogs()" style="background:#1a1a2e">View Logs</button>
+  <button onclick="viewFlags()" style="background:#3b0000">🚨 Flags</button>
+</div>
 <div id="result"></div>
 <script>
 async function api(method, path, body) {
@@ -158,7 +206,7 @@ async function listKeys() {
   const data = await api('GET', '/api/admin/list?secret=' + encodeURIComponent(s));
   if (data.ok) {
     if (data.keys.length === 0) { d.textContent = 'No keys found.'; return; }
-    d.textContent = data.keys.length + ' key(s):\\n\\n' + data.keys.map(k => k.key + '  ' + (k.hwid ? 'LOCKED to ' + k.hwid : 'UNUSED')).join('\\n');
+    d.textContent = data.keys.length + ' key(s):\\n\\n' + data.keys.map(k => k.key + '  ' + (k.hwid ? 'LOCKED → ' + k.hwid : 'UNUSED')).join('\\n');
   } else { d.textContent = 'Error: ' + data.error; }
 }
 async function viewLogs() {
@@ -168,8 +216,19 @@ async function viewLogs() {
   const data = await api('GET', '/api/admin/logs?secret=' + encodeURIComponent(s));
   if (data.ok) {
     if (data.logs.length === 0) { d.textContent = 'No logs yet.'; return; }
-    d.textContent = data.logs.length + ' open event(s):\\n\\n' +
-      data.logs.map(l => l.time + '  |  ' + (l.username !== 'unknown' ? l.username : 'not logged in') + '  |  IP: ' + l.ip + '  |  HWID: ' + l.hwid).join('\\n');
+    d.textContent = data.logs.length + ' event(s):\\n\\n' +
+      data.logs.map(l => l.time + '  |  ' + String(l.event).toUpperCase().padEnd(15) + '  |  ' + (l.username !== 'unknown' ? l.username : 'guest') + '  |  IP: ' + l.ip + (l.detail ? '  |  ' + l.detail : '') + '  |  HWID: ' + l.hwid).join('\\n');
+  } else { d.textContent = 'Error: ' + data.error; }
+}
+async function viewFlags() {
+  const s = document.getElementById('secret').value;
+  const d = document.getElementById('result');
+  d.style.display = 'block'; d.textContent = 'Loading...';
+  const data = await api('GET', '/api/admin/flags?secret=' + encodeURIComponent(s));
+  if (data.ok) {
+    if (data.flags.length === 0) { d.textContent = 'No suspicious activity detected.'; return; }
+    d.textContent = '🚨 ' + data.flags.length + ' suspicious event(s):\\n\\n' +
+      data.flags.map(f => f.time + '  |  ' + f.reason.toUpperCase().padEnd(20) + '  |  IP: ' + f.ip + '  |  HWID: ' + f.hwid + '  |  ' + f.detail).join('\\n');
   } else { d.textContent = 'Error: ' + data.error; }
 }
 </script></body></html>`);
