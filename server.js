@@ -106,6 +106,54 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, server: 'Medusa License Server' });
 });
 
+app.get('/admin', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html><head><title>Medusa Admin</title>
+<style>
+  body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:40px;max-width:800px;margin:0 auto}
+  h1{color:#8b5cf6}input,button{background:#1a1a1a;color:#e0e0e0;border:1px solid #333;padding:10px;font-family:monospace;font-size:14px;border-radius:6px;margin:4px}
+  input:focus{border-color:#8b5cf6;outline:none}button{background:#8b5cf6;color:#fff;cursor:pointer;border:none;font-weight:bold}
+  button:hover{background:#7c3aed}
+  #result{margin-top:20px;padding:15px;background:#1a1a1a;border-radius:6px;display:none;border:1px solid #333;white-space:pre-wrap}
+  label{display:block;margin-top:16px;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px}
+</style></head><body>
+<h1>Medusa License Server</h1>
+<label>Admin Secret</label>
+<input type="password" id="secret" placeholder="Enter admin secret" style="width:300px">
+<label>Generate Keys</label>
+<div><input type="number" id="count" value="5" min="1" max="50" style="width:80px"> <button onclick="generate()">Generate</button> <button onclick="listKeys()" style="background:#333">List All</button></div>
+<div id="result"></div>
+<script>
+const API = '';
+async function api(method, path, body) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  return r.json();
+}
+async function generate() {
+  const s = document.getElementById('secret').value;
+  const c = parseInt(document.getElementById('count').value) || 5;
+  const d = document.getElementById('result');
+  d.style.display = 'block'; d.textContent = 'Generating...';
+  const data = await api('POST', '/api/admin/generate', { secret: s, count: c });
+  if (data.ok) { d.textContent = 'Generated ' + data.keys.length + ' key(s):\\n\\n' + data.keys.join('\\n'); }
+  else { d.textContent = 'Error: ' + data.error; }
+}
+async function listKeys() {
+  const s = document.getElementById('secret').value;
+  const d = document.getElementById('result');
+  d.style.display = 'block'; d.textContent = 'Loading...';
+  const data = await api('GET', '/api/admin/list?secret=' + encodeURIComponent(s));
+  if (data.ok) {
+    if (data.keys.length === 0) { d.textContent = 'No keys found.'; return; }
+    d.textContent = data.keys.length + ' key(s):\\n\\n';
+    d.textContent += data.keys.map(k => k.key + '  ' + (k.hwid ? 'LOCKED → ' + k.hwid : 'UNUSED')).join('\\n');
+  } else { d.textContent = 'Error: ' + data.error; }
+}
+</script></body></html>`);
+});
+
 app.listen(PORT, () => {
   console.log(`Medusa License Server running on port ${PORT}`);
 });
