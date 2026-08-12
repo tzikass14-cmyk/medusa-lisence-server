@@ -113,7 +113,8 @@ app.get('/admin', (req, res) => {
   body{font-family:monospace;background:#0a0a0a;color:#e0e0e0;padding:40px;max-width:800px;margin:0 auto}
   h1{color:#8b5cf6}input,button{background:#1a1a1a;color:#e0e0e0;border:1px solid #333;padding:10px;font-family:monospace;font-size:14px;border-radius:6px;margin:4px}
   input:focus{border-color:#8b5cf6;outline:none}button{background:#8b5cf6;color:#fff;cursor:pointer;border:none;font-weight:bold}
-  button:hover{background:#7c3aed}
+  button:hover{background:#7c3aed}.key{background:#1a1a1a;border:1px solid #333;padding:10px;margin:6px 0;border-radius:6px;display:flex;justify-content:space-between;align-items:center}
+  .key code{color:#8b5cf6;font-size:16px}.hwid{color:#666;font-size:12px}.free{color:#22c55e}.locked{color:#ef4444}
   #result{margin-top:20px;padding:15px;background:#1a1a1a;border-radius:6px;display:none;border:1px solid #333;white-space:pre-wrap}
   label{display:block;margin-top:16px;color:#888;font-size:12px;text-transform:uppercase;letter-spacing:1px}
 </style></head><body>
