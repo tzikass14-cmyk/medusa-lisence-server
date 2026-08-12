@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'medusa-admin-key-change-me';
 
 let keysDb = {};
+const openLogs = [];
 
 app.use(cors());
 app.use(express.json());
@@ -97,6 +98,26 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, server: 'Medusa License Server' });
 });
 
+app.post('/api/log-open', (req, res) => {
+  const { hwid, username, version } = req.body;
+  const entry = {
+    time: new Date().toISOString(),
+    hwid: hwid || 'unknown',
+    username: username || 'unknown',
+    version: version || 'unknown',
+    ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
+  };
+  openLogs.unshift(entry);
+  if (openLogs.length > 500) openLogs.pop();
+  return res.json({ ok: true });
+});
+
+app.get('/api/admin/logs', (req, res) => {
+  const secret = req.query.secret;
+  if (secret !== ADMIN_SECRET) return res.json({ ok: false, error: 'Unauthorized.' });
+  return res.json({ ok: true, logs: openLogs });
+});
+
 app.get('/admin', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html><head><title>Medusa Admin</title>
@@ -112,7 +133,7 @@ app.get('/admin', (req, res) => {
 <label>Admin Secret</label>
 <input type="password" id="secret" placeholder="Enter admin secret" style="width:300px">
 <label>Generate Keys</label>
-<div><input type="number" id="count" value="5" min="1" max="50" style="width:80px"> <button onclick="generate()">Generate</button> <button onclick="listKeys()" style="background:#333">List All</button></div>
+<div><input type="number" id="count" value="5" min="1" max="50" style="width:80px"> <button onclick="generate()">Generate</button> <button onclick="listKeys()" style="background:#333">List All</button> <button onclick="viewLogs()" style="background:#1a1a2e">View Logs</button></div>
 <div id="result"></div>
 <script>
 async function api(method, path, body) {
@@ -138,6 +159,17 @@ async function listKeys() {
   if (data.ok) {
     if (data.keys.length === 0) { d.textContent = 'No keys found.'; return; }
     d.textContent = data.keys.length + ' key(s):\\n\\n' + data.keys.map(k => k.key + '  ' + (k.hwid ? 'LOCKED to ' + k.hwid : 'UNUSED')).join('\\n');
+  } else { d.textContent = 'Error: ' + data.error; }
+}
+async function viewLogs() {
+  const s = document.getElementById('secret').value;
+  const d = document.getElementById('result');
+  d.style.display = 'block'; d.textContent = 'Loading...';
+  const data = await api('GET', '/api/admin/logs?secret=' + encodeURIComponent(s));
+  if (data.ok) {
+    if (data.logs.length === 0) { d.textContent = 'No logs yet.'; return; }
+    d.textContent = data.logs.length + ' open event(s):\\n\\n' +
+      data.logs.map(l => l.time + '  |  ' + (l.username !== 'unknown' ? l.username : 'not logged in') + '  |  IP: ' + l.ip + '  |  HWID: ' + l.hwid).join('\\n');
   } else { d.textContent = 'Error: ' + data.error; }
 }
 </script></body></html>`);
